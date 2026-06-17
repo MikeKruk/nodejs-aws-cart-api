@@ -14,7 +14,7 @@ import { CreateOrderDto, PutCartPayload } from 'src/order/type';
 import { BasicAuthGuard } from '../auth';
 import { Order, OrderService } from '../order';
 import { AppRequest, getUserIdFromRequest } from '../shared';
-import { CartItem } from './models';
+import { CartItem, CartStatuses } from './models';
 import { calculateCartTotal } from './models-rules';
 import { CartService } from './services';
 
@@ -83,7 +83,7 @@ export class CartController {
       address: body.address,
       total,
     });
-    await this.cartService.removeByUserId(userId);
+    await this.cartService.updateStatusByCartId(cartId, CartStatuses.ORDERED);
 
     return {
       order,
@@ -92,7 +92,7 @@ export class CartController {
 
   @UseGuards(BasicAuthGuard)
   @Get('order')
-  getOrder(): Order[] {
+  async getOrder(): Promise<Order[]> {
     return this.orderService.getAll();
   }
 }

@@ -92,4 +92,14 @@ export class CartService {
       await this.pool.query(`DELETE FROM carts WHERE id =$1`, [cart.id]);
     }
   }
+
+  async updateStatusByCartId(
+    cartId: string,
+    status: CartStatuses,
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE carts SET status = $1, updated_at = NOW() WHERE id = $2`,
+      [status, cartId],
+    );
+  }
 }
