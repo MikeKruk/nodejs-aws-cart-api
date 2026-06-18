@@ -2,7 +2,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { DATABASE_POOL } from 'src/database/database.module';
-import { PutCartPayload } from 'src/order/type';
+import { Order } from 'src/order';
+import {
+  CreateOrderPayload,
+  OrderStatus,
+  PutCartPayload,
+} from 'src/order/type';
 import { Cart, CartItemRow, CartRow, CartStatuses } from '../models';
 
 @Injectable()
@@ -101,5 +106,39 @@ export class CartService {
       `UPDATE carts SET status = $1, updated_at = NOW() WHERE id = $2`,
       [status, cartId],
     );
+  }
+
+  async checkout(orderData: CreateOrderPayload): Promise<Order> {
+    const connect = await this.pool.connect();
+    try {
+      await connect.query('BEGIN');
+
+      await connect.query(
+        `UPDATE carts SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [CartStatuses.ORDERED, orderData.cartId],
+      );
+
+      const { rows: orders } = await connect.query<Order>(
+        `INSERT INTO orders (id, user_id, cart_id, payment, delivery, comments, status, total) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [
+          randomUUID(),
+          orderData.userId,
+          orderData.cartId,
+          JSON.stringify({}),
+          JSON.stringify(orderData.address),
+          orderData.address.comment,
+          OrderStatus.Open,
+          orderData.total,
+        ],
+      );
+
+      await connect.query('COMMIT');
+      return orders[0];
+    } catch (error) {
+      await connect.query('ROLLBACK');
+      throw error;
+    } finally {
+      connect.release();
+    }
   }
 }

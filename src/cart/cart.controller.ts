@@ -14,7 +14,7 @@ import { CreateOrderDto, PutCartPayload } from 'src/order/type';
 import { BasicAuthGuard } from '../auth';
 import { Order, OrderService } from '../order';
 import { AppRequest, getUserIdFromRequest } from '../shared';
-import { CartItem, CartStatuses } from './models';
+import { CartItem } from './models';
 import { calculateCartTotal } from './models-rules';
 import { CartService } from './services';
 
@@ -73,7 +73,7 @@ export class CartController {
 
     const { id: cartId, items } = cart;
     const total = calculateCartTotal(items);
-    const order = this.orderService.create({
+    const order = await this.cartService.checkout({
       userId,
       cartId,
       items: items.map(({ product, count }) => ({
@@ -83,7 +83,6 @@ export class CartController {
       address: body.address,
       total,
     });
-    await this.cartService.updateStatusByCartId(cartId, CartStatuses.ORDERED);
 
     return {
       order,
