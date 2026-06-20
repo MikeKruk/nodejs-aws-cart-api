@@ -1,0 +1,34 @@
+# this folder will be installed again inside the container
+node_modules
+
+# this is build output, we rebuild it inside the container
+dist
+
+# git history is not needed to run the app
+.git
+.gitignore
+
+# test reports, not needed to run the app
+coverage 
+
+# those files only needed during dev, not for prod
+test
+
+# this folder is for Lambda dev, not needed for Docker
+infrastructure
+
+# secrets should not be inside the image, we pass them as env var in EB
+.env*
+
+# sql seed are only for setup, not needed to run the app
+db
+
+# dont need to be inside the image itself
+Dockerfile
+.dockerignore
+
+# editor setting, not related to the app
+.vscode
+
+# macOS system files, not related to the app
+.DS_Store
