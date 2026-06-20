@@ -1,35 +1,58 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Cart, CartStatuses } from '../models';
-import { PutCartPayload } from 'src/order/type';
+import { Pool } from 'pg';
+import { DATABASE_POOL } from 'src/database/database.module';
+import { Order } from 'src/order';
+import {
+  CreateOrderPayload,
+  OrderStatus,
+  PutCartPayload,
+} from 'src/order/type';
+import { Cart, CartItemRow, CartRow, CartStatuses } from '../models';
 
 @Injectable()
 export class CartService {
-  private userCarts: Record<string, Cart> = {};
+  constructor(@Inject(DATABASE_POOL) private readonly pool: Pool) {}
 
-  findByUserId(userId: string): Cart {
-    return this.userCarts[userId];
-  }
+  async findByUserId(userId: string): Promise<Cart | null> {
+    const { rows: carts } = await this.pool.query<CartRow>(
+      `SELECT * FROM carts WHERE user_id = $1 AND status = 'OPEN' LIMIT 1`,
+      [userId],
+    );
 
-  createByUserId(user_id: string): Cart {
-    const timestamp = Date.now();
+    if (!carts[0]) return null;
 
-    const userCart = {
-      id: randomUUID(),
-      user_id,
-      created_at: timestamp,
-      updated_at: timestamp,
-      status: CartStatuses.OPEN,
-      items: [],
+    const { rows: items } = await this.pool.query<CartItemRow>(
+      `SELECT * FROM cart_items WHERE cart_id = $1`,
+      [carts[0].id],
+    );
+
+    return {
+      ...carts[0],
+      items: items.map((item) => ({
+        product: {
+          id: item.product_id,
+          title: '',
+          description: '',
+          price: 0,
+        },
+        count: item.count,
+      })),
     };
-
-    this.userCarts[user_id] = userCart;
-
-    return userCart;
   }
 
-  findOrCreateByUserId(userId: string): Cart {
-    const userCart = this.findByUserId(userId);
+  async createByUserId(user_id: string): Promise<Cart> {
+    const id = randomUUID();
+    const { rows } = await this.pool.query<CartRow>(
+      `INSERT INTO carts (id, user_id, status) VALUES ($1, $2, $3) RETURNING *`,
+      [id, user_id, CartStatuses.OPEN],
+    );
+
+    return { ...rows[0], items: [] };
+  }
+
+  async findOrCreateByUserId(userId: string): Promise<Cart> {
+    const userCart = await this.findByUserId(userId);
 
     if (userCart) {
       return userCart;
@@ -38,25 +61,84 @@ export class CartService {
     return this.createByUserId(userId);
   }
 
-  updateByUserId(userId: string, payload: PutCartPayload): Cart {
-    const userCart = this.findOrCreateByUserId(userId);
-
-    const index = userCart.items.findIndex(
-      ({ product }) => product.id === payload.product.id,
+  async updateByUserId(userId: string, payload: PutCartPayload): Promise<Cart> {
+    const cart = await this.findOrCreateByUserId(userId);
+    const { rows: existing } = await this.pool.query<CartItemRow>(
+      `SELECT * FROM cart_items WHERE cart_id = $1 AND product_id = $2`,
+      [cart.id, payload.product.id],
     );
 
-    if (index === -1) {
-      userCart.items.push(payload);
+    if (existing.length === 0) {
+      await this.pool.query<CartItemRow>(
+        `INSERT INTO cart_items (cart_id, product_id, count) VALUES ($1, $2, $3)`,
+        [cart.id, payload.product.id, payload.count],
+      );
     } else if (payload.count === 0) {
-      userCart.items.splice(index, 1);
+      await this.pool.query<CartItemRow>(
+        `DELETE FROM cart_items WHERE cart_id = $1 AND product_id = $2`,
+        [cart.id, payload.product.id],
+      );
     } else {
-      userCart.items[index] = payload;
+      await this.pool.query<CartItemRow>(
+        `UPDATE cart_items SET count = $1 WHERE cart_id = $2 AND product_id = $3`,
+        [payload.count, cart.id, payload.product.id],
+      );
     }
 
-    return userCart;
+    return this.findByUserId(userId);
   }
 
-  removeByUserId(userId): void {
-    this.userCarts[userId] = null;
+  async removeByUserId(userId): Promise<void> {
+    const cart = await this.findByUserId(userId);
+    if (cart) {
+      await this.pool.query(`DELETE FROM cart_items WHERE cart_id = $1`, [
+        cart.id,
+      ]);
+      await this.pool.query(`DELETE FROM carts WHERE id =$1`, [cart.id]);
+    }
+  }
+
+  async updateStatusByCartId(
+    cartId: string,
+    status: CartStatuses,
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE carts SET status = $1, updated_at = NOW() WHERE id = $2`,
+      [status, cartId],
+    );
+  }
+
+  async checkout(orderData: CreateOrderPayload): Promise<Order> {
+    const connect = await this.pool.connect();
+    try {
+      await connect.query('BEGIN');
+
+      await connect.query(
+        `UPDATE carts SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [CartStatuses.ORDERED, orderData.cartId],
+      );
+
+      const { rows: orders } = await connect.query<Order>(
+        `INSERT INTO orders (id, user_id, cart_id, payment, delivery, comments, status, total) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [
+          randomUUID(),
+          orderData.userId,
+          orderData.cartId,
+          JSON.stringify({}),
+          JSON.stringify(orderData.address),
+          orderData.address.comment,
+          OrderStatus.Open,
+          orderData.total,
+        ],
+      );
+
+      await connect.query('COMMIT');
+      return orders[0];
+    } catch (error) {
+      await connect.query('ROLLBACK');
+      throw error;
+    } finally {
+      connect.release();
+    }
   }
 }
